@@ -53,7 +53,7 @@
 
 <script setup>
 import { ref, onMounted } from "vue";
-import { get } from '../utils/request';
+import { get, post } from '../utils/request';
 import ContextMenu from '../components/ContextMenu.vue';
 import BackToTop from '../components/BackToTop.vue';
 import CommonSkeleton from '../components/CommonSkeleton.vue';
@@ -151,11 +151,13 @@ const loadRecommendations = async (refresh = false) => {
         requests.push(
             get('/recommend/songs', { platform: 'android', timestamp: timestamp + 1 }),
             get('/everyday/history', { mode: 'list', platform: 'ios', timestamp: timestamp + 2 }),
-            // The upstream home/discover module supplies numeric defaults in
-            // the signed request body. Avoid passing query-string numbers,
-            // which are strings at the API boundary and are rejected by the
-            // upstream Go service.
-            get('/home/discover'),
+            // Send numeric recommendation controls as JSON. The API wrapper
+            // preserves POST body types when building the signed request.
+            post('/home/discover', {
+                pagesize: 30,
+                today_play_num: seenRecommendationHashes.size,
+                recall_type: 'song',
+            }),
             get('/top/card', { card_id: cardId, timestamp: timestamp + 4 }),
         );
     }
