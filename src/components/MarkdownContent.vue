@@ -61,7 +61,7 @@ const props = defineProps({
     },
     repoUrl: {
         type: String,
-        default: 'https://github.com/MoeKoeMusic/MoeKoeMusic'
+        default: 'https://github.com/YanfeixyL/MoeMusic'
     }
 });
 

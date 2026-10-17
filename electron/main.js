@@ -6,7 +6,7 @@ import {
     registerProtocolHandler, sendHashAfterLoad, getTray, createMvWindow
 } from './appServices.js';
 import { initializeExtensions, cleanupExtensions } from './extensions/extensions.js';
-import { setupAutoUpdater, startUpdateDownload } from './services/updater.js';
+import { setupAutoUpdater, checkForUpdates, startUpdateDownload, getUpdateState, installUpdate, stopAutoUpdater } from './services/updater.js';
 import apiService from './services/apiService.js';
 import statusBarLyricsService from './services/statusBarLyricsService.js';
 import customTrayMenuService from './services/customTrayMenuService.js';
@@ -21,6 +21,21 @@ let mainWindow = null;
 let blockerId = null;
 const store = new Store();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function showStartupError(message) {
+    return dialog.showMessageBox({
+        type: 'error',
+        title: t('error'),
+        message,
+        buttons: [t('check-updates'), t('quit')],
+        defaultId: 0,
+        cancelId: 1
+    }).then(({ response }) => {
+        if (response === 0) return checkForUpdates(false);
+        app.isQuitting = true;
+        app.quit();
+    });
+}
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -42,6 +57,7 @@ if (!gotTheLock) {
 }
 
 app.on('ready', () => {
+    setupAutoUpdater(() => mainWindow);
     startApiServer().then(() => {
         try {
             mainWindow = createWindow();
@@ -54,7 +70,6 @@ app.on('ready', () => {
             if (process.platform === "darwin" && store.get('settings')?.touchBar == 'on') createTouchBar(mainWindow);
             playStartupSound();
             registerShortcut();
-            setupAutoUpdater(mainWindow);
             apiService.init(mainWindow);
             registerProtocolHandler(mainWindow);
             sendHashAfterLoad(mainWindow);
@@ -63,33 +78,12 @@ app.on('ready', () => {
         } catch (error) {
             console.log('初始化应用时发生错误:', error);
             createTray(null);
-            dialog.showMessageBox({
-                type: 'error',
-                title: t('error'),
-                message: t('init-error'),
-                buttons: [t('ok')]
-            }).then(result => {
-                if (result.response === 0) {
-                    app.isQuitting = true;
-                    app.quit();
-                }
-            });
+            void showStartupError(t('init-error'));
         }
     }).catch((error) => {
         console.log('API 服务启动失败:', error);
         createTray(null);
-        dialog.showMessageBox({
-            type: 'error',
-            title: t('error'),
-            message: t('api-error'),
-            buttons: [t('ok')]
-        }).then(result => {
-            if (result.response === 0) {
-                app.isQuitting = true;
-                app.quit();
-            }
-            return;
-        });
+        void showStartupError(t('api-error'));
     });
 });
 
@@ -115,7 +109,9 @@ if (settings?.apiMode === 'on') {
 
 // 即将退出
 app.on('before-quit', () => {
-    if (mainWindow && !mainWindow.isMaximized()) {
+    app.isQuitting = true;
+    stopAutoUpdater();
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMaximized()) {
         const windowBounds = mainWindow.getBounds();
         store.set('windowState', windowBounds);
     }
@@ -123,20 +119,22 @@ app.on('before-quit', () => {
         powerSaveBlocker.stop(blockerId);
     }
 
-    // 清理状态栏歌词服务
-    setImmediate(() => {
-        statusBarLyricsService.cleanup();
-        customTrayMenuService.cleanup();
-
-        stopApiServer();
-        apiService.stop();
-        cleanupExtensions();
-        app.exit(0);
-    });
+    // Finish cleanup before Electron emits quit; electron-updater installs on that event.
+    // app.exit() bypasses the normal quit lifecycle and must not be used here.
+    for (const cleanup of [
+        () => statusBarLyricsService.cleanup(),
+        () => customTrayMenuService.cleanup(),
+        stopApiServer,
+        () => apiService.stop(),
+        cleanupExtensions
+    ]) {
+        try { cleanup(); }
+        catch (error) { console.error('Application cleanup failed:', error); }
+    }
 });
 // 关闭所有窗口
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    if (process.platform !== 'darwin' && !app.isQuitting) {
         app.isQuitting = true;
         app.quit(); // 非 macOS 系统上关闭所有窗口后退出应用
     }
@@ -360,6 +358,17 @@ ipcMain.handle('export-log', async (e) => {
     catch (err) { return { error: err }; }
 });
 
-ipcMain.handle('start-update-download', async () => {
+function isMainWindowRequest(event) {
+    return mainWindow && !mainWindow.isDestroyed()
+        && event.sender === mainWindow.webContents
+        && event.senderFrame === mainWindow.webContents.mainFrame;
+}
+
+ipcMain.handle('start-update-download', async (event) => {
+    if (!isMainWindowRequest(event)) return { success: false, reason: 'unauthorized' };
     return await startUpdateDownload();
 });
+
+ipcMain.handle('get-update-state', (event) => isMainWindowRequest(event) ? getUpdateState() : null);
+ipcMain.handle('install-update', (event) => isMainWindowRequest(event)
+    ? installUpdate() : { success: false, reason: 'unauthorized' });

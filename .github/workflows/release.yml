@@ -68,6 +68,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: "Release ${{ steps.set-version.outputs.NEW_VERSION }}"
           body: ${{ steps.create-release.outputs.RELEASE_BODY }}
+          target_commitish: ${{ github.sha }}
           prerelease: false
           draft: true # 先创建草稿
 
@@ -93,11 +94,19 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm' # use cache
 
+      - name: Install dependencies
+        run: npm run install-all
+
+      - name: Set release version
+        run: npm version "${{ needs.increment-version.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Test
+        run: npm test
+
       - name: Build
         env:
           os: ${{ runner.os == 'Windows' && 'win' || runner.os == 'macOS' && 'macos' || 'linux' }}
         run: |
-          npm run install-all
           npm run build
           npm run electron:build:${{ env.os }}
 
@@ -105,7 +114,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.increment-version.outputs.version }}
-          draft: false # 这里更新下状态
+          draft: true # 全部平台上传成功后再公开，避免客户端下载到不完整版本
           files: |
             ./dist_electron/*.exe
             ./dist_electron/*.zip
@@ -114,3 +123,15 @@ jobs:
             ./dist_electron/*.deb
             ./dist_electron/*.blockmap
             ./dist_electron/latest*.yml
+
+  publish-release:
+    name: Publish Complete Release
+    needs: [increment-version, build-and-upload]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish after all platform assets are uploaded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.increment-version.outputs.version }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

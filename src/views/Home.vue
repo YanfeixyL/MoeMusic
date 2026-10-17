@@ -1,19 +1,31 @@
 <template>
     <div class="container">
         <HomeRecommendations :playerControl="playerControl" />
-        <h2 class="section-title">
-            <img :src="`./assets/images/home/mama.png`" class="mama" @click="addAllSongsToQueue">
-            {{ $t('mei-ri-tui-jian') }}
-        </h2>
+        <div class="section-heading">
+            <h2 class="section-title">
+                <img :src="`./assets/images/home/mama.png`" class="mama" @click="addAllSongsToQueue">
+                {{ $t('mei-ri-tui-jian') }}
+            </h2>
+            <button
+                class="recommend-refresh-button"
+                type="button"
+                :disabled="isRefreshing"
+                :title="$t('shua-xin-tui-jian')"
+                :aria-label="$t('shua-xin-tui-jian')"
+                @click="refreshRecommendations"
+            >
+                <i class="fas fa-sync-alt" :class="{ spinning: isRefreshing }"></i>
+            </button>
+        </div>
         <CommonSkeleton v-if="isLoading" variant="compact-grid" :count="20" />
         <div v-else class="song-list">
             <div class="song-item" v-for="(song, index) in songs" :key="index"
-                @click="playSong(song['hash'], song.ori_audio_name, $getCover(song.sizable_cover, 480), song.author_name)"
+                @click="playSong(song.hash, song.name, song.cover || './assets/images/ico.png', song.author)"
                 @contextmenu.prevent="showContextMenu($event, song)">
-                <img :src="$getCover(song.sizable_cover, 64)" :alt="song.ori_audio_name" class="song-cover">
+                <img :src="$getCover(song.cover, 64)" :alt="song.name" class="song-cover">
                 <div class="song-info">
-                    <div class="song-title">{{ song.ori_audio_name }}</div>
-                    <div class="song-artist">{{ song.author_name }}</div>
+                    <div class="song-title">{{ song.name }}</div>
+                    <div class="song-artist">{{ song.author }}</div>
                 </div>
             </div>
         </div>
@@ -49,12 +61,23 @@ import HomeRecommendations from '../components/home/HomeRecommendations.vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getCover } from '../utils/utils';
 import { useActivatedWatch } from '../composables/useActivatedWatch';
+import {
+    extractRecommendationSongs,
+    mergeRecommendationSongs,
+    rememberRecommendationHashes,
+    selectRecommendationBatch,
+} from '../utils/recommendations';
 
 const router = useRouter();
 const route = useRoute();
 const songs = ref([]);
 const special_list = ref([]);
 const isLoading = ref(true);
+const isRefreshing = ref(false);
+const seenRecommendationHashes = new Set();
+let previousRecommendationHashes = [];
+let recommendationRefreshRound = 0;
+const recommendationCardIds = [1, 2, 3, 4, 6];
 const playSong = (hash, name, img, author) => {
     props.playerControl.addSongToQueue(hash, name, img, author);
 };
@@ -62,10 +85,10 @@ const contextMenuRef = ref(null);
 const showContextMenu = (event, song) => {
     if (contextMenuRef.value) {
         contextMenuRef.value.openContextMenu(event, {
-            OriSongName: song.filename,
+            OriSongName: song.name || song.filename,
             FileHash: song.hash,
-            cover: song.sizable_cover?.replace("{size}", 480) || './assets/images/ico.png',
-            timeLength: song.time_length
+            cover: song.cover || './assets/images/ico.png',
+            timeLength: song.timelen
         });
     }
 };
@@ -74,7 +97,7 @@ const props = defineProps({
 });
 
 onMounted(() => {
-    recommend();
+    loadRecommendations();
     playlist();
 });
 
@@ -113,13 +136,55 @@ useActivatedWatch(() => [route.query.hash, route.query.listid], (_value, _oldVal
     handleShareRoute(onCleanup);
 }, { immediate: true });
 
-const recommend = async () => {
-    const response = await get('/everyday/recommend');
-    if (response.status == 1) {
-        songs.value = response.data.song_list.sort(() => Math.random() - 0.5);
+const loadRecommendations = async (refresh = false) => {
+    if (refresh && isRefreshing.value) return;
+    if (refresh) isRefreshing.value = true;
+
+    const timestamp = Date.now();
+    const requests = [
+        get('/everyday/recommend', { platform: 'ios', timestamp }),
+    ];
+
+    if (refresh) {
+        const cardId = recommendationCardIds[recommendationRefreshRound % recommendationCardIds.length];
+        recommendationRefreshRound += 1;
+        requests.push(
+            get('/recommend/songs', { platform: 'android', timestamp: timestamp + 1 }),
+            get('/everyday/history', { mode: 'list', platform: 'ios', timestamp: timestamp + 2 }),
+            // The upstream home/discover module supplies numeric defaults in
+            // the signed request body. Avoid passing query-string numbers,
+            // which are strings at the API boundary and are rejected by the
+            // upstream Go service.
+            get('/home/discover'),
+            get('/top/card', { card_id: cardId, timestamp: timestamp + 4 }),
+        );
     }
-    isLoading.value = false;
-}
+
+    try {
+        const settled = await Promise.allSettled(requests);
+        const responses = settled
+            .filter(result => result.status === 'fulfilled')
+            .map(result => result.value);
+        const candidates = mergeRecommendationSongs(extractRecommendationSongs(responses));
+        const nextSongs = selectRecommendationBatch(candidates, {
+            seenHashes: seenRecommendationHashes,
+            previousHashes: previousRecommendationHashes,
+        });
+
+        if (nextSongs.length) {
+            songs.value = nextSongs;
+            previousRecommendationHashes = nextSongs.map(song => song.hash);
+            rememberRecommendationHashes(seenRecommendationHashes, nextSongs);
+        }
+    } catch (error) {
+        console.error('每日推荐加载失败:', error);
+    } finally {
+        isLoading.value = false;
+        isRefreshing.value = false;
+    }
+};
+
+const refreshRecommendations = () => loadRecommendations(true);
 
 const playlist = async () => {
     const response = await get(`/top/playlist?category_id=0`);
@@ -135,10 +200,10 @@ const privilegeSong = async (hash) => {
 const addAllSongsToQueue = () => {
     props.playerControl.addPlaylistToQueue(songs.value.map(song => ({
         hash: song.hash,
-        name: song.ori_audio_name,
-        cover: song.sizable_cover?.replace("{size}", 480),
-        author: song.author_name,
-        timelen: song.time_length
+        name: song.name,
+        cover: song.cover,
+        author: song.author,
+        timelen: song.timelen
     })));
 };
 
@@ -174,6 +239,43 @@ const addAllSongsToQueue = () => {
         --home-song-artist: rgba(255, 255, 255, 0.58);
         --home-song-hover-bg: rgba(var(--primary-color-rgb), 0.12);
     }
+}
+
+.section-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.recommend-refresh-button {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 30px;
+    border: 0;
+    border-radius: 50%;
+    color: var(--primary-color);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.recommend-refresh-button:hover:not(:disabled),
+.recommend-refresh-button:focus-visible {
+    background: rgba(var(--primary-color-rgb), 0.12);
+    transform: rotate(20deg);
+}
+
+.recommend-refresh-button:disabled {
+    cursor: wait;
+    opacity: 0.6;
+}
+
+.recommend-refresh-button .spinning {
+    animation: recommendation-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes recommendation-refresh-spin {
+    to { transform: rotate(360deg); }
 }
 
 .section-title {
