@@ -21,6 +21,18 @@ test('recommendation candidates are normalized and deduplicated by hash', () => 
     assert.equal(result[0].name, 'first');
 });
 
+test('home discover items and history lists are converted into playable songs', () => {
+    const responses = [
+        { status: 1, data: { items: [{ song_info: { hash_128: 'home-hash', songname: 'Home song', author_name: 'Artist' } }] } },
+        { status: 1, data: { lists: [{ song_list: [{ hash: 'history-hash', songname: 'History song' }] }] } },
+    ];
+
+    const result = mergeRecommendationSongs(extractRecommendationSongs(responses));
+
+    assert.deepEqual(result.map(item => item.hash), ['HOME-HASH', 'HISTORY-HASH']);
+    assert.equal(result[0].name, 'Home song');
+});
+
 test('refresh prefers songs that have not been shown in this session', () => {
     const songs = ['a', 'b', 'c', 'd', 'e', 'f'].map(hash => song(hash));
     const seen = new Set(['A', 'B', 'C']);
