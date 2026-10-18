@@ -22,7 +22,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import MarkdownContent from './MarkdownContent.vue';
 import { openRegisterUrl } from '../utils/utils';
 import { isVersionLower, formatReleaseNotes } from '../utils/appUpdate';
@@ -32,7 +32,7 @@ const props = defineProps({
     platform: { type: String, default: '' }
 });
 const emit = defineEmits(['badge-change']);
-const projectRepoUrl = 'https://github.com/MoeKoeMusic/MoeKoeMusic';
+const projectRepoUrl = 'https://github.com/YanfeixyL/MoeMusic';
 const repoUrl = `${projectRepoUrl}/releases`;
 const showUpdateDialog = ref(false);
 const showNewBadge = ref(false);
@@ -49,6 +49,7 @@ const updateProgress = computed(() => {
     return Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
 });
 const updateStatusText = computed(() => actionError.value || updateState.value.error || ({
+    idle: '点击“在线更新”后检查新版本。',
     checking: '正在检查更新...',
     available: '发现新版本，准备下载...',
     downloading: '正在后台下载更新，可以继续听歌。',
@@ -88,7 +89,7 @@ const fetchLatestVersion = async () => {
     releaseRequest = request;
     const timeout = setTimeout(() => request.abort(), 15_000);
     try {
-        const response = await fetch('https://api.github.com/repos/MoeKoeMusic/MoeKoeMusic/releases/latest', {
+        const response = await fetch('https://api.github.com/repos/YanfeixyL/MoeMusic/releases/latest', {
             signal: request.signal
         });
         if (!response.ok) throw new Error(`获取更新信息失败（HTTP ${response.status}）`);
@@ -114,7 +115,6 @@ const openManualUpdatePage = () => openRegisterUrl(manualUpdateUrl.value);
 const handleEntryClick = () => {
     showUpdateDialog.value = true;
     if (useReleaseApi) void fetchLatestVersion();
-    else if (['idle', 'error', 'not-available'].includes(updateState.value.status)) void startOnlineUpdate();
 };
 
 const startOnlineUpdate = async () => {
@@ -140,7 +140,6 @@ const startOnlineUpdate = async () => {
     }
 };
 
-watch(() => props.appVersion, () => { void fetchLatestVersion(); }, { immediate: true });
 onMounted(async () => {
     if (!window.electronAPI?.getUpdateState) {
         updateState.value = { status: 'unsupported' };

@@ -522,3 +522,6 @@ Windows NSIS 和 Linux AppImage 是本次启用的安装形式；macOS 因当前
 6. **发布和更新**：`build` 配置 → Release workflow → `updater.js` → `updateController.js` → 更新页面 → 正常退出流程。
 
 查某个函数、接口或资源时使用逐文件索引中的链接。函数索引是源码位置导航；异步顺序、分支和数据归一化以本文对应链路及实际函数体为准。
+
+
+每日推荐刷新策略见 [推荐刷新审查说明](D:/Project/MoeKoeMusic/docs/RECOMMENDATION_REFRESH_REVIEW.md)，实现位于 [Home.vue](D:/Project/MoeKoeMusic/src/views/Home.vue) 和 [recommendations.js](D:/Project/MoeKoeMusic/src/utils/recommendations.js)。

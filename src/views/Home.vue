@@ -14,12 +14,12 @@
         <CommonSkeleton v-if="isLoading" variant="compact-grid" :count="20" />
         <div v-else class="song-list">
             <div class="song-item" v-for="song in songs" :key="song.hash"
-                @click="playSong(song['hash'], song.ori_audio_name, $getCover(song.sizable_cover, 480), song.author_name)"
+                @click="playSong(song['hash'], song.name, $getCover(song.cover, 480), song.author)"
                 @contextmenu.prevent="showContextMenu($event, song)">
-                <img :src="$getCover(song.sizable_cover, 64)" :alt="song.ori_audio_name" class="song-cover">
+                <img :src="$getCover(song.cover, 64)" :alt="song.name" class="song-cover">
                 <div class="song-info">
-                    <div class="song-title">{{ song.ori_audio_name }}</div>
-                    <div class="song-artist">{{ song.author_name }}</div>
+                    <div class="song-title">{{ song.name }}</div>
+                    <div class="song-artist">{{ song.author }}</div>
                 </div>
             </div>
         </div>
@@ -56,6 +56,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { getCover } from '../utils/utils';
 import { useActivatedWatch } from '../composables/useActivatedWatch';
 import { MoeAuthStore } from '../stores/store';
+import { normalizeRecommendationSong } from '../utils/recommendations';
 import {
     RECOMMENDATION_TARGET_COUNT,
     extractRecommendationSongs,
@@ -79,10 +80,10 @@ const contextMenuRef = ref(null);
 const showContextMenu = (event, song) => {
     if (contextMenuRef.value) {
         contextMenuRef.value.openContextMenu(event, {
-            OriSongName: song.filename,
+            OriSongName: song.name || song.filename,
             FileHash: song.hash,
-            cover: song.sizable_cover?.replace("{size}", 480) || './assets/images/ico.png',
-            timeLength: song.time_length
+            cover: song.cover?.replace("{size}", 480) || './assets/images/ico.png',
+            timeLength: song.timelen
         });
     }
 };
@@ -170,7 +171,7 @@ const loadFreshRecommendations = async () => {
             if (!isSuccessfulRecommendationResponse(response)) continue;
 
             const sourceSongs = extractRecommendationSongs(response.data)
-                .map(song => ({ ...song, recommendationSource: source.name }));
+                .map(song => ({ ...normalizeRecommendationSong(song), recommendationSource: source.name }));
             candidates.push(...sourceSongs);
 
             const fresh = selectFreshRecommendations({
@@ -233,10 +234,10 @@ const privilegeSong = async (hash) => {
 const addAllSongsToQueue = () => {
     props.playerControl.addPlaylistToQueue(songs.value.map(song => ({
         hash: song.hash,
-        name: song.ori_audio_name,
-        cover: song.sizable_cover?.replace("{size}", 480),
-        author: song.author_name,
-        timelen: song.time_length
+        name: song.name,
+        cover: song.cover?.replace("{size}", 480),
+        author: song.author,
+        timelen: song.timelen
     })));
 };
 

@@ -6,8 +6,6 @@ import { createUpdateController, supportsAutoUpdate } from './updateController.j
 
 const { autoUpdater } = electronUpdater;
 let controller;
-let startupTimer;
-let checkTimer;
 let installPrompt;
 let getMainWindow = () => null;
 
@@ -57,12 +55,6 @@ export function setupAutoUpdater(windowProvider) {
             if (state.status === 'downloaded') void showInstallPrompt();
         }
     });
-    if (controller.getState().status !== 'unsupported') {
-        startupTimer = setTimeout(() => { void checkForUpdates(true); }, 10_000);
-        checkTimer = setInterval(() => { void checkForUpdates(true); }, 4 * 60 * 60 * 1000);
-        startupTimer.unref();
-        checkTimer.unref();
-    }
 }
 
 export function getUpdateState() {
@@ -99,6 +91,4 @@ export function installUpdate() {
 }
 
 export function stopAutoUpdater() {
-    clearTimeout(startupTimer);
-    clearInterval(checkTimer);
 }
