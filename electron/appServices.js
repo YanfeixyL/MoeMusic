@@ -117,7 +117,7 @@ export function createWindow() {
 
     mainWindow.on('close', (event) => {
         const savedConfig = store.get('settings');
-        if (savedConfig?.minimizeToTray === 'off') {
+        if (!app.isQuitting && savedConfig?.minimizeToTray === 'off') {
             app.isQuitting = true;
             app.quit();
         }
@@ -573,7 +573,10 @@ export function startApiServer() {
 // 停止 API 服务器
 export function stopApiServer() {
     if (apiProcess) {
-        process.kill(apiProcess.pid, 'SIGKILL');
+        // A failed/exited child may no longer have a PID during update shutdown.
+        if (apiProcess.pid && apiProcess.exitCode === null && !apiProcess.killed) {
+            apiProcess.kill('SIGKILL');
+        }
         apiProcess = null;
     }
 }

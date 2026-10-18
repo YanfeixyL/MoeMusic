@@ -34,9 +34,9 @@ const translations = {
     'update-hint': '更新提示',
     'already-latest': '当前已是最新版本',
     'update-ready': '更新就绪',
-    'update-ready-msg': '新版本已下载完成，立即安装？',
+    'update-ready-msg': '新版本已下载完成。立即重启安装，或在正常退出应用时自动安装。',
     'install-now': '现在安装',
-    'install-later': '稍后安装',
+    'install-later': '退出时安装',
     'non-update': '当前环境暂不支持在线更新，请前往官网或应用市场下载最新版本。'
   },
   'zh-TW': {
@@ -69,9 +69,9 @@ const translations = {
     'update-hint': '更新提示',
     'already-latest': '當前已是最新版本',
     'update-ready': '更新就緒',
-    'update-ready-msg': '新版本已下載完成，立即安裝？',
+    'update-ready-msg': '新版本已下載完成。立即重新啟動安裝，或在正常結束應用程式時自動安裝。',
     'install-now': '現在安裝',
-    'install-later': '稍後安裝',
+    'install-later': '結束時安裝',
     'non-update': '當前環境暫不支持線上更新，請前往官網或應用市場下載最新版本。'
   },
   'en': {
@@ -104,9 +104,9 @@ const translations = {
     'update-hint': 'Update',
     'already-latest': 'Already up to date',
     'update-ready': 'Update Ready',
-    'update-ready-msg': 'Update downloaded. Install now?',
+    'update-ready-msg': 'Update downloaded. Restart to install now, or install automatically when you quit the app.',
     'install-now': 'Install Now',
-    'install-later': 'Later',
+    'install-later': 'Install on Quit',
     'non-update': 'Online update is not available in the current environment. Please download the latest version from the official website or app store.'
   },
   'ru': {
@@ -139,9 +139,9 @@ const translations = {
     'update-hint': 'Обновление',
     'already-latest': 'Установлена последняя версия',
     'update-ready': 'Обновление готово',
-    'update-ready-msg': 'Обновление загружено. Установить сейчас?',
+    'update-ready-msg': 'Обновление загружено. Перезапустите для установки сейчас или установите автоматически при выходе.',
     'install-now': 'Установить',
-    'install-later': 'Позже',
+    'install-later': 'При выходе',
     'non-update': 'Онлайн-обновление недоступно в текущей среде. Скачайте последнюю версию с официального сайта или из магазина приложений.'
   },
   'ja': {
@@ -174,9 +174,9 @@ const translations = {
     'update-hint': '更新',
     'already-latest': '最新バージョンです',
     'update-ready': '更新準備完了',
-    'update-ready-msg': '更新がダウンロードされました。今すぐインストールしますか？',
+    'update-ready-msg': '更新をダウンロードしました。今すぐ再起動してインストールするか、アプリ終了時に自動インストールします。',
     'install-now': '今すぐインストール',
-    'install-later': '後で',
+    'install-later': '終了時にインストール',
     'non-update': '現在の環境ではオンライン更新は利用できません。公式サイトまたはアプリストアから最新版をダウンロードしてください。'
   },
   'ko': {
@@ -209,9 +209,9 @@ const translations = {
     'update-hint': '업데이트',
     'already-latest': '최신 버전입니다',
     'update-ready': '업데이트 준비 완료',
-    'update-ready-msg': '업데이트가 다운로드되었습니다. 지금 설치하시겠습니까?',
+    'update-ready-msg': '업데이트를 다운로드했습니다. 지금 다시 시작하여 설치하거나 앱 종료 시 자동 설치합니다.',
     'install-now': '지금 설치',
-    'install-later': '나중에',
+    'install-later': '종료 시 설치',
     'non-update': '현재 환경에서는 온라인 업데이트를 지원하지 않습니다. 공식 웹사이트 또는 앱 스토어에서 최신 버전을 다운로드하세요.'
   }
 };

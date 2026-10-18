@@ -1,236 +1,168 @@
 <template>
     <div v-if="showUpdateDialog" class="modal-overlay" @click="closeUpdateDialog">
         <div class="modal-content update-dialog" @click.stop>
-            <h2>发现新版本 V{{ latestVersion }}</h2>
+            <h2>{{ showNewBadge ? `发现新版本 V${latestVersion}` : '软件更新' }}</h2>
             <MarkdownContent class="update-log-box" :content="updateLog" :repo-url="projectRepoUrl" />
-            <div v-if="isStartingUpdate || isDownloadingUpdate || isUpdateDownloaded || updateStatusText" class="update-progress-inline">
+            <div v-if="isDownloadingUpdate || isUpdateDownloaded" class="update-progress-inline">
                 <div class="update-progress-bar">
                     <div class="update-progress-fill" :style="{ width: `${updateProgress}%` }"></div>
                 </div>
                 <span class="update-progress-percent">{{ updateProgress.toFixed(1) }}%</span>
             </div>
+            <p v-if="updateStatusText" role="status">{{ updateStatusText }}</p>
             <div class="update-dialog-actions">
-                <button @click="startOnlineUpdate" :disabled="isStartingUpdate || isDownloadingUpdate || isUpdateDownloaded">
-                    {{ isUpdateDownloaded ? '下载完成' : isDownloadingUpdate ? '下载中...' : isStartingUpdate ? '正在启动...' : '在线更新' }}
+                <button @click="startOnlineUpdate" :disabled="isStartingUpdate || isDownloadingUpdate || updateState.status === 'unsupported'">
+                    {{ isUpdateDownloaded ? '立即重启安装' : isDownloadingUpdate ? '下载中...' : isStartingUpdate ? '正在启动...' : '在线更新' }}
                 </button>
                 <button @click="openManualUpdatePage">手动更新</button>
-                <button class="secondary-button" @click="closeUpdateDialog">取消更新</button>
+                <button class="secondary-button" @click="closeUpdateDialog">关闭</button>
             </div>
         </div>
     </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import MarkdownContent from './MarkdownContent.vue';
 import { openRegisterUrl } from '../utils/utils';
+import { isVersionLower, formatReleaseNotes } from '../utils/appUpdate';
 
 const props = defineProps({
-    appVersion: {
-        type: String,
-        default: ''
-    },
-    platform: {
-        type: String,
-        default: ''
-    }
+    appVersion: { type: String, default: '' },
+    platform: { type: String, default: '' }
 });
-
 const emit = defineEmits(['badge-change']);
-
 const projectRepoUrl = 'https://github.com/MoeKoeMusic/MoeKoeMusic';
 const repoUrl = `${projectRepoUrl}/releases`;
 const showUpdateDialog = ref(false);
 const showNewBadge = ref(false);
-const downloadUrl = ref('');
 const updateLog = ref('暂无更新日志');
 const latestVersion = ref('');
-const isStartingUpdate = ref(false);
-const isDownloadingUpdate = ref(false);
-const isUpdateDownloaded = ref(false);
-const updateProgress = ref(0);
-const updateStatusText = ref('');
-const updateSpeedText = ref('');
-const updateSizeText = ref('');
+const manualUpdateUrl = ref(repoUrl);
+const updateState = ref({ status: 'idle', progress: null, error: null });
+const actionError = ref('');
+const isStartingUpdate = computed(() => ['checking', 'available'].includes(updateState.value.status));
+const isDownloadingUpdate = computed(() => updateState.value.status === 'downloading');
+const isUpdateDownloaded = computed(() => updateState.value.status === 'downloaded');
+const updateProgress = computed(() => {
+    const percent = Number(updateState.value.progress?.percent);
+    return Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0;
+});
+const updateStatusText = computed(() => actionError.value || updateState.value.error || ({
+    checking: '正在检查更新...',
+    available: '发现新版本，准备下载...',
+    downloading: '正在后台下载更新，可以继续听歌。',
+    downloaded: '更新已下载，正常退出时自动安装，也可以立即重启安装。',
+    'not-available': '当前已是最新版本',
+    unsupported: '当前环境不支持自动安装，请使用手动更新。'
+}[updateState.value.status] || ''));
+let unsubscribe;
+let stateRevision = 0;
+let useReleaseApi = !window.electronAPI?.getUpdateState;
+let releaseRequest;
 
 const setShowNewBadge = (value) => {
     showNewBadge.value = value;
     emit('badge-change', value);
 };
 
-const formatBytes = (bytes = 0) => {
-    if (!bytes) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    const value = bytes / (1024 ** index);
-    return `${value.toFixed(value >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
-};
-
-const isVersionLower = (current, latest) => {
-    const currentParts = current.split('.').map(Number);
-    const latestParts = latest.split('.').map(Number);
-    for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
-        if ((latestParts[i] || 0) > (currentParts[i] || 0)) {
-            return true;
-        } else if ((latestParts[i] || 0) < (currentParts[i] || 0)) {
-            return false;
-        }
+const applyUpdateState = (state) => {
+    if (!state) return;
+    stateRevision += 1;
+    updateState.value = state;
+    actionError.value = '';
+    if (state.info?.version) {
+        latestVersion.value = state.info.version;
+        updateLog.value = formatReleaseNotes(state.info.releaseNotes) || '暂无更新日志';
+        setShowNewBadge(true);
+    } else if (state.status === 'not-available') {
+        setShowNewBadge(false);
     }
-    return false;
 };
 
-const getPlatformDownloadUrl = (release) => {
-    const assets = Array.isArray(release?.assets) ? release.assets : [];
-    if (!assets.length) {
-        return release?.html_url || repoUrl;
-    }
-
-    const platformMatchers = {
-        win32: [/\.exe$/i, /\.msi$/i],
-        darwin: [/\.dmg$/i, /\.zip$/i],
-        linux: [/\.AppImage$/i, /\.deb$/i, /\.rpm$/i]
-    };
-
-    const matchers = platformMatchers[props.platform] || [];
-    const asset = assets.find(item => matchers.some(matcher => matcher.test(item.name)));
-    return asset?.browser_download_url || release?.html_url || repoUrl;
-};
-
+// Only web/unsupported packages use the Releases API; desktop updates use main-process state.
 const fetchLatestVersion = async () => {
-    if (!props.appVersion) {
-        return;
-    }
-
+    if (!props.appVersion || !useReleaseApi) return;
+    releaseRequest?.abort();
+    const request = new AbortController();
+    releaseRequest = request;
+    const timeout = setTimeout(() => request.abort(), 15_000);
     try {
-        const response = await fetch('https://api.github.com/repos/iAJue/MoeKoeMusic/releases/latest');
+        const response = await fetch('https://api.github.com/repos/MoeKoeMusic/MoeKoeMusic/releases/latest', {
+            signal: request.signal
+        });
+        if (!response.ok) throw new Error(`获取更新信息失败（HTTP ${response.status}）`);
         const data = await response.json();
-        downloadUrl.value = getPlatformDownloadUrl(data);
+        if (releaseRequest !== request || request.signal.aborted) return;
+        if (typeof data.tag_name !== 'string') throw new Error('发布信息缺少版本号');
         latestVersion.value = data.tag_name.replace(/^v/, '');
         updateLog.value = data.body?.trim() || '暂无更新日志';
+        // Open a release page so users can choose the correct CPU architecture.
+        manualUpdateUrl.value = `${repoUrl}/tag/${encodeURIComponent(data.tag_name)}`;
         setShowNewBadge(isVersionLower(props.appVersion, latestVersion.value));
+        actionError.value = '';
     } catch (error) {
-        console.error('获取最新版本号失败:', error);
+        if (releaseRequest === request) actionError.value = error.name === 'AbortError'
+            ? '获取更新信息超时，请稍后重试或手动更新。' : error.message;
+    } finally {
+        clearTimeout(timeout);
     }
 };
 
-const closeUpdateDialog = () => {
-    showUpdateDialog.value = false;
-};
-
-const openManualUpdatePage = () => {
-    openRegisterUrl(downloadUrl.value || repoUrl);
-};
-
+const closeUpdateDialog = () => { showUpdateDialog.value = false; };
+const openManualUpdatePage = () => openRegisterUrl(manualUpdateUrl.value);
 const handleEntryClick = () => {
-    if (!showNewBadge.value && !isStartingUpdate.value && !isDownloadingUpdate.value && !isUpdateDownloaded.value) {
-        openRegisterUrl(repoUrl);
-        return;
-    }
     showUpdateDialog.value = true;
-};
-
-const handleUpdateProgress = (_event, progressObj) => {
-    isStartingUpdate.value = false;
-    isDownloadingUpdate.value = true;
-    isUpdateDownloaded.value = false;
-    updateProgress.value = Math.max(0, Math.min(100, Number(progressObj?.percent || 0)));
-    updateStatusText.value = '正在下载更新';
-    updateSpeedText.value = progressObj?.bytesPerSecond ? `${formatBytes(progressObj.bytesPerSecond)}/s` : '';
-    if (progressObj?.transferred || progressObj?.total) {
-        updateSizeText.value = `${formatBytes(progressObj.transferred || 0)} / ${formatBytes(progressObj.total || 0)}`;
-    } else {
-        updateSizeText.value = '';
-    }
-};
-
-const handleUpdateDownloaded = () => {
-    isStartingUpdate.value = false;
-    isDownloadingUpdate.value = false;
-    isUpdateDownloaded.value = true;
-    updateProgress.value = 100;
-    updateStatusText.value = '更新包已下载完成，请等待安装提示';
-    updateSpeedText.value = '';
-};
-
-const handleUpdateError = (_event, payload) => {
-    isStartingUpdate.value = false;
-    isDownloadingUpdate.value = false;
-    if (!isUpdateDownloaded.value) {
-        updateStatusText.value = payload?.message || '更新失败，请稍后重试';
-    }
-    updateSpeedText.value = '';
+    if (useReleaseApi) void fetchLatestVersion();
+    else if (['idle', 'error', 'not-available'].includes(updateState.value.status)) void startOnlineUpdate();
 };
 
 const startOnlineUpdate = async () => {
-    if (isStartingUpdate.value || isDownloadingUpdate.value || isUpdateDownloaded.value) {
-        return;
-    }
-
-    if (!window.electronAPI?.startUpdateDownload) {
-        await window.$modal.alert('当前环境暂不支持在线更新，请前往官网或应用市场下载最新版本。');
-        return;
-    }
-
-    isStartingUpdate.value = true;
-    updateStatusText.value = '正在启动在线更新...';
-    updateSpeedText.value = '';
-    updateSizeText.value = '';
+    if (isStartingUpdate.value || isDownloadingUpdate.value) return;
+    actionError.value = '';
     try {
+        if (isUpdateDownloaded.value) {
+            const result = await window.electronAPI.installUpdate();
+            if (!result?.success) actionError.value = result?.message || '安装尚未就绪，请稍后重试。';
+            return;
+        }
+        if (!window.electronAPI?.startUpdateDownload) {
+            actionError.value = '当前环境不支持自动安装，请使用手动更新。';
+            return;
+        }
         const result = await window.electronAPI.startUpdateDownload();
-        if (result?.success) {
-            isDownloadingUpdate.value = true;
-            updateStatusText.value = '已开始在线更新，正在等待下载进度...';
-            return;
+        // Download completion is reported through state; do not overwrite it with "downloading".
+        if (!result?.success && !['not-available', 'unsupported'].includes(result?.reason)) {
+            actionError.value = result?.message || '更新失败，请稍后重试。';
         }
-
-        isStartingUpdate.value = false;
-        isDownloadingUpdate.value = false;
-
-        if (result?.reason === 'unsupported') {
-            updateStatusText.value = '当前环境暂不支持在线更新';
-            await window.$modal.alert('当前环境暂不支持在线更新，请前往官网或应用市场下载最新版本。');
-            return;
-        }
-
-        if (result?.reason === 'not-available') {
-            setShowNewBadge(false);
-            updateStatusText.value = '当前没有可用更新';
-            await window.$modal.alert('当前没有可用更新，请前往仓库查看最新发布状态。');
-            return;
-        }
-
-        updateStatusText.value = result?.message || '启动在线更新失败，请稍后重试。';
-        await window.$modal.alert(result?.message || '启动在线更新失败，请稍后重试。');
-    } finally {
-        isStartingUpdate.value = false;
+    } catch (error) {
+        actionError.value = error?.message || '更新失败，请稍后重试。';
     }
 };
 
-watch(() => [props.appVersion, props.platform], ([appVersion]) => {
-    if (appVersion) {
-        fetchLatestVersion();
+watch(() => props.appVersion, () => { void fetchLatestVersion(); }, { immediate: true });
+onMounted(async () => {
+    if (!window.electronAPI?.getUpdateState) {
+        updateState.value = { status: 'unsupported' };
+        return;
     }
-}, { immediate: true });
-
-onMounted(() => {
-    if (window.electron) {
-        window.electron.ipcRenderer.on('update-progress', handleUpdateProgress);
-        window.electron.ipcRenderer.on('update-downloaded', handleUpdateDownloaded);
-        window.electron.ipcRenderer.on('update-error', handleUpdateError);
+    // Subscribe before reading the snapshot; ignore a snapshot if a newer event arrived.
+    unsubscribe = window.electronAPI.onUpdateState(applyUpdateState);
+    const revision = stateRevision;
+    try {
+        const state = await window.electronAPI.getUpdateState();
+        if (revision === stateRevision) applyUpdateState(state);
+        useReleaseApi = state?.status === 'unsupported';
+        if (useReleaseApi) await fetchLatestVersion();
+    } catch (error) {
+        actionError.value = error?.message || '读取更新状态失败';
     }
 });
-
 onUnmounted(() => {
-    if (window.electron) {
-        window.electron.ipcRenderer.removeListener('update-progress', handleUpdateProgress);
-        window.electron.ipcRenderer.removeListener('update-downloaded', handleUpdateDownloaded);
-        window.electron.ipcRenderer.removeListener('update-error', handleUpdateError);
-    }
+    unsubscribe?.();
+    releaseRequest?.abort();
 });
-
-defineExpose({
-    handleEntryClick
-});
+defineExpose({ handleEntryClick });
 </script>
 
 <style lang="scss" scoped>

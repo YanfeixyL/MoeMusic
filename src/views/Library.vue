@@ -44,9 +44,15 @@
                             <span class="user-age">{{ formatRegTime(userDetail.rtime || 0) }}</span>
                         </div>
                         <div class="user-actions">
-                            <span class="action-button" @click="signIn">{{ $t('qian-dao') }}</span>
-                            <span class="action-button" @click="getVip">VIP</span>
-                            <span class="action-button" @click="createTeamEventPopup">组队领取 VIP</span>
+                            <span class="action-button" :class="{ 'is-loading': signInLoading }"
+                                :aria-busy="signInLoading" @click="signIn">
+                                {{ signInLoading ? '签到中…' : $t('qian-dao') }}
+                            </span>
+                        </div>
+                        <div class="vip-status" role="status">
+                            <span class="vip-status-label">VIP有效期</span>
+                            <span v-if="vipStatus.length">{{ vipStatus.join('；') }}</span>
+                            <span v-else>当前无有效VIP</span>
                         </div>
                     </div>
                 </div>
@@ -173,7 +179,6 @@ import { getProfileBgColor } from '../utils/utils';
 import { MoeAuthStore } from '../stores/store';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { createTeamEventPopup } from '@/utils/teamEvent';
 import BirthdayEasterEgg from '../components/BirthdayEasterEgg.vue';
 import CommonSkeleton from '../components/CommonSkeleton.vue';
 const { t } = useI18n();
@@ -188,6 +193,7 @@ const followedArtists = ref([]); // 关注的歌手
 const listenHistory = ref([]); // 听歌历史
 const userVip = ref({});
 const userDetail = ref({}); // 新增：用户详细信息
+const signInLoading = ref(false);
 const categories = ref([t('wo-chuang-jian-de-ge-dan'), t('wo-shou-cang-de-ge-dan'), t('wo-shou-cang-de-zhuan-ji'), t('wo-guan-zhu-de-ge-shou'), t('wo-guan-zhu-de-hao-you')]);
 const selectedCategory = ref(0);
 const isLoading = ref(true);
@@ -201,6 +207,44 @@ const profileHeaderStyle = computed(() => ({
     '--profile-bg-image': profileBackgroundImage.value ? `url(${profileBackgroundImage.value})` : 'none',
     '--profile-bg-color': profileBgColor.value
 }));
+const parseVipEndTime = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+        const numeric = Number(value);
+        const timestamp = numeric < 1e12 ? numeric * 1000 : numeric;
+        const date = new Date(timestamp);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const date = new Date(String(value).replace(/-/g, '/'));
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+const formatVipEndTime = (value) => {
+    const date = parseVipEndTime(value);
+    if (!date) return String(value || '未知');
+    const pad = (number) => String(number).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+const formatVipRemaining = (value) => {
+    const date = parseVipEndTime(value);
+    if (!date) return '';
+    const remaining = date.getTime() - Date.now();
+    if (remaining <= 0) return '已到期';
+    const minutes = Math.ceil(remaining / 60000);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    if (days > 0) return `剩余${days}天${hours}小时`;
+    return `剩余${Math.max(hours, 1)}小时`;
+};
+const vipStatus = computed(() => {
+    const vipList = Array.isArray(userVip.value) ? userVip.value : [];
+    return vipList
+        .filter(vip => vip?.is_vip == 1)
+        .map(vip => {
+            const label = vip.product_type === 'svip' ? '概念版VIP' : '畅听版VIP';
+            const remaining = formatVipRemaining(vip.vip_end_time);
+            return `${label}至${formatVipEndTime(vip.vip_end_time)}${remaining ? `（${remaining}）` : ''}`;
+        });
+});
 const userGenderIcon = computed(() => {
     const gender = userDetail.value.gender;
     if (gender === 1) return 'fas fa-mars';
@@ -405,48 +449,38 @@ const goToArtistDetail = (artist) => {
         }
     });
 };
+const getLocalDateKey = () => {
+    const now = new Date();
+    const pad = (number) => String(number).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
 const signIn = async () => {
+    if (signInLoading.value) return;
+    signInLoading.value = true;
     try {
-        const res = await get('/youth/vip');
-        if (res.status === 1) {
-            window.$modal.alert(`签到成功，获得${res.data.award_vip_hour}小时VIP时长`);
-        }
-    } catch (error) {
-        window.$modal.alert('签到失败![该接口将在未来被移除]');
-    }
-}
-const getVip = async () => {
-    try {
-        const todayKey = new Date().toLocaleDateString('zh-CN', {
-            year: 'numeric', month: '2-digit', day: '2-digit'
-        }).replace(/\//g, '-');
-        const vipResponse = await get('/youth/day/vip', {
-            receive_day: todayKey
+        const res = await get('/youth/day/vip', {
+            receive_day: getLocalDateKey(),
+            timestamp: Date.now(),
         });
-        const result = await window.$modal.confirm('是否继续升级至概念版VIP,享受更高音质?');
-        if (result) {
-            try {
-                const vipResponse = await get('/youth/day/vip/upgrade');
-                if (vipResponse.status === 1) {
-                    window.$modal.alert('升级成功，获得1天概念版VIP');
-                }
-            } catch (error) {
-                window.$modal.alert(error.error_msg || '升级VIP失败, 一天仅限一次');
-            }
-        } else if (vipResponse.status === 1) {
-            window.$modal.alert(`签到成功，获得1天畅听VIP`);
+        if (res?.status !== 1) {
+            window.$modal.alert(res?.error_msg || '签到失败，请稍后重试');
+            return;
         }
+        await getVipInfo();
+        window.$modal.alert('签到成功，已获得1天畅听VIP');
     } catch (error) {
-        if (error.response.data.error_code == 131001) {
+        const errorCode = error?.response?.data?.error_code;
+        if (errorCode === 131001) {
             window.$modal.alert('你今天已经签到过了');
-            return;
-        } else if (error.response.data.error_code == 20028) {
-            window.$modal.alert('当前账号风控,请前往手机端领取');
-            return;
+        } else if (errorCode === 20028) {
+            window.$modal.alert('当前账号风控，请前往手机端领取');
+        } else {
+            window.$modal.alert(error?.response?.data?.error_msg || '签到失败，请稍后重试');
         }
-        window.$modal.alert('获取VIP失败-' + error.response.data.error_code);
+    } finally {
+        signInLoading.value = false;
     }
-}
+};
 const addAllSongsToQueue = () => {
     props.playerControl.addPlaylistToQueue(listenHistory.value.map(song => ({
         hash: song.hash,
@@ -741,6 +775,25 @@ const addAllSongsToQueue = () => {
     &:hover {
         background-color: rgba(255, 255, 255, 0.3);
     }
+
+    &.is-loading {
+        cursor: wait;
+        opacity: 0.65;
+        pointer-events: none;
+    }
+}
+
+.vip-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.vip-status-label {
+    color: rgba(255, 255, 255, 0.72);
 }
 
 .favorite-section {

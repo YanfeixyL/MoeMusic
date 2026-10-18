@@ -1,9 +1,7 @@
 import { ref } from 'vue';
-import { get } from '../../utils/request';
-import { MoeAuthStore } from '../../stores/store';
 
 
-export function useHelpers(t) {
+export function useHelpers() {
   const isInputFocused = ref(false);
   
   // 环境检测
@@ -72,34 +70,6 @@ export function useHelpers(t) {
     };
   };
   
-  // 获取VIP
-  const getVip = async () => {
-    if (typeof MoeAuthStore !== 'function') return;
-
-    const MoeAuth = MoeAuthStore();
-    if (!MoeAuth.isAuthenticated) return;
-
-    const todayKey = new Date().toLocaleDateString('zh-CN', {
-      year: 'numeric', month: '2-digit', day: '2-digit'
-    }).replace(/\//g, '-');
-    const lastVipDate = localStorage.getItem('lastVipRequestDate');
-
-    if (lastVipDate === todayKey) {
-      return;
-    }
-
-    try {
-      await get('/youth/day/vip',{
-        receive_day: todayKey
-      });
-      await new Promise(resolve => setTimeout(resolve, 500));
-      await get('/youth/day/vip/upgrade');
-    } catch (error) {
-      console.error('领取VIP失败:', error);
-    }
-    localStorage.setItem('lastVipRequestDate', todayKey);
-  };
-  
   return {
     isInputFocused,
     isElectron,
@@ -107,7 +77,6 @@ export function useHelpers(t) {
     checkFocus,
     handleKeyDown,
     desktopLyrics,
-    throttle,
-    getVip
+    throttle
   };
 }

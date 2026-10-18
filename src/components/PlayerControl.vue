@@ -350,7 +350,7 @@ const isDragging = ref(false);
 const lyricsFlag = ref(false);
 
 // 辅助函数
-const { isElectron, throttle, getVip, desktopLyrics } = useHelpers(t);
+const { isElectron, throttle, desktopLyrics } = useHelpers();
 
 // Easter Egg 相关
 const easterEggImages = [
@@ -961,7 +961,6 @@ const playSong = async (song) => {
         localStorage.setItem('current_song', JSON.stringify(currentSong.value));
         window.electron?.ipcRenderer?.send('current-song-updated');
 
-        getVip();
         // 获取歌词
         getCurrentLyrics();
         const highlightHash = currentSong.value.hash;
@@ -1711,9 +1710,6 @@ onMounted(() => {
         currentSpeed.value = parseFloat(savedSpeed);
         setPlaybackRate(currentSpeed.value);
     }
-
-    // 获取VIP
-    getVip();
 
     // 添加事件监听
     document.addEventListener('keydown', handleKeyDown);

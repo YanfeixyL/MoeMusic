@@ -1,13 +1,19 @@
 <template>
     <div class="container">
         <HomeRecommendations :playerControl="playerControl" />
-        <h2 class="section-title">
-            <img :src="`./assets/images/home/mama.png`" class="mama" @click="addAllSongsToQueue">
-            {{ $t('mei-ri-tui-jian') }}
-        </h2>
+        <div class="section-title-row">
+            <h2 class="section-title">
+                <img :src="`./assets/images/home/mama.png`" class="mama" @click="addAllSongsToQueue">
+                {{ $t('mei-ri-tui-jian') }}
+            </h2>
+            <button class="recommend-refresh-button" type="button" :disabled="isRefreshing" :title="$t('huan-yi-pi')" @click="recommend">
+                <i class="fas fa-sync-alt" :class="{ spinning: isRefreshing }"></i>
+                <span>{{ $t('huan-yi-pi') }}</span>
+            </button>
+        </div>
         <CommonSkeleton v-if="isLoading" variant="compact-grid" :count="20" />
         <div v-else class="song-list">
-            <div class="song-item" v-for="(song, index) in songs" :key="index"
+            <div class="song-item" v-for="song in songs" :key="song.hash"
                 @click="playSong(song['hash'], song.ori_audio_name, $getCover(song.sizable_cover, 480), song.author_name)"
                 @contextmenu.prevent="showContextMenu($event, song)">
                 <img :src="$getCover(song.sizable_cover, 64)" :alt="song.ori_audio_name" class="song-cover">
@@ -49,12 +55,23 @@ import HomeRecommendations from '../components/home/HomeRecommendations.vue';
 import { useRoute, useRouter } from 'vue-router';
 import { getCover } from '../utils/utils';
 import { useActivatedWatch } from '../composables/useActivatedWatch';
+import { MoeAuthStore } from '../stores/store';
+import {
+    RECOMMENDATION_TARGET_COUNT,
+    extractRecommendationSongs,
+    getRecommendationHistoryKey,
+    loadRecommendationHistory,
+    saveRecommendationHistory,
+    selectFreshRecommendations,
+} from '../utils/recommendationStrategy';
 
 const router = useRouter();
 const route = useRoute();
 const songs = ref([]);
 const special_list = ref([]);
 const isLoading = ref(true);
+const isRefreshing = ref(false);
+const MoeAuth = MoeAuthStore();
 const playSong = (hash, name, img, author) => {
     props.playerControl.addSongToQueue(hash, name, img, author);
 };
@@ -113,13 +130,94 @@ useActivatedWatch(() => [route.query.hash, route.query.listid], (_value, _oldVal
     handleShareRoute(onCleanup);
 }, { immediate: true });
 
-const recommend = async () => {
-    const response = await get('/everyday/recommend');
-    if (response.status == 1) {
-        songs.value = response.data.song_list.sort(() => Math.random() - 0.5);
+const recommendationSources = [
+    { name: 'everyday', path: '/everyday/recommend' },
+    { name: 'recommend_songs', path: '/recommend/songs' },
+    { name: 'top_card_1', path: '/top/card', params: { card_id: 1 } },
+    { name: 'top_card_2', path: '/top/card', params: { card_id: 2 } },
+    { name: 'top_card_3', path: '/top/card', params: { card_id: 3 } },
+    { name: 'top_card_4', path: '/top/card', params: { card_id: 4 } },
+    { name: 'new_song', path: '/top/song' },
+    { name: 'youth_tag', path: '/top/tag/card/youth' },
+    { name: 'youth_card_3001', path: '/top/card/youth', params: { card_id: 3001 } },
+    { name: 'youth_card_3005', path: '/top/card/youth', params: { card_id: 3005 } },
+];
+
+const isSuccessfulRecommendationResponse = response => {
+    if (!response || response.status === 0) return false;
+    if (response.error_code !== undefined && response.error_code !== 0) return false;
+    return Boolean(response.data);
+};
+
+const loadFreshRecommendations = async () => {
+    // Home can mount before App.vue's device initialization hook. Wait for it
+    // here so a first-run refresh uses the same history key as later refreshes.
+    if (!MoeAuth.Device) await MoeAuth.initDevice();
+    const historyKey = getRecommendationHistoryKey(MoeAuth.UserInfo, MoeAuth.Device);
+    const history = loadRecommendationHistory(localStorage, historyKey);
+    const candidates = [];
+
+    for (const source of recommendationSources) {
+        try {
+            const response = await get(source.path, {
+                ...(source.params || {}),
+                // The API server caches identical URLs for two minutes. A
+                // timestamp bypasses that proxy cache; the upstream daily
+                // pool can still remain stable for the current date.
+                timestamp: Date.now(),
+            });
+
+            if (!isSuccessfulRecommendationResponse(response)) continue;
+
+            const sourceSongs = extractRecommendationSongs(response.data)
+                .map(song => ({ ...song, recommendationSource: source.name }));
+            candidates.push(...sourceSongs);
+
+            const fresh = selectFreshRecommendations({
+                songs: candidates,
+                seenHashes: history,
+                targetCount: RECOMMENDATION_TARGET_COUNT,
+            });
+            if (fresh.length >= RECOMMENDATION_TARGET_COUNT) break;
+        } catch (error) {
+            console.warn(`[推荐] ${source.name} 请求失败`, error);
+        }
     }
-    isLoading.value = false;
-}
+
+    const freshSongs = selectFreshRecommendations({
+        songs: candidates,
+        seenHashes: history,
+        targetCount: RECOMMENDATION_TARGET_COUNT,
+    });
+
+    if (freshSongs.length !== RECOMMENDATION_TARGET_COUNT) {
+        const shortageError = new Error(`推荐候选池仅剩 ${freshSongs.length} 首新歌`);
+        shortageError.code = 'INSUFFICIENT_FRESH_RECOMMENDATIONS';
+        throw shortageError;
+    }
+
+    freshSongs.forEach(song => history.add(song.hash));
+    saveRecommendationHistory(history, localStorage, historyKey);
+    return freshSongs;
+};
+
+const recommend = async () => {
+    if (isRefreshing.value) return;
+    isRefreshing.value = true;
+    isLoading.value = true;
+
+    try {
+        songs.value = await loadFreshRecommendations();
+    } catch (error) {
+        console.error('[推荐] 刷新失败:', error);
+        window.$message?.error?.(error.code === 'INSUFFICIENT_FRESH_RECOMMENDATIONS'
+            ? '当前推荐候选池不足，请稍后再试'
+            : '推荐刷新失败，请稍后再试');
+    } finally {
+        isRefreshing.value = false;
+        isLoading.value = false;
+    }
+};
 
 const playlist = async () => {
     const response = await get(`/top/playlist?category_id=0`);
@@ -174,6 +272,44 @@ const addAllSongsToQueue = () => {
         --home-song-artist: rgba(255, 255, 255, 0.58);
         --home-song-hover-bg: rgba(var(--primary-color-rgb), 0.12);
     }
+}
+
+.section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.recommend-refresh-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 30px;
+    padding: 7px 12px;
+    color: var(--primary-color);
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 45%, transparent);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, opacity 0.2s ease;
+
+    &:hover:not(:disabled) {
+        background-color: rgba(var(--primary-color-rgb), 0.1);
+    }
+
+    &:disabled {
+        cursor: wait;
+        opacity: 0.65;
+    }
+
+    .spinning {
+        animation: recommendation-spin 0.9s linear infinite;
+    }
+}
+
+@keyframes recommendation-spin {
+    to { transform: rotate(360deg); }
 }
 
 .section-title {
@@ -303,7 +439,6 @@ const addAllSongsToQueue = () => {
 
 @media screen and (max-width: 768px) {
     .song-list {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
         margin-bottom: 28px;
     }
@@ -323,12 +458,6 @@ const addAllSongsToQueue = () => {
 
     .song-artist {
         font-size: 12px;
-    }
-}
-
-@media screen and (max-width: 576px) {
-    .song-list {
-        grid-template-columns: 1fr;
     }
 }
 

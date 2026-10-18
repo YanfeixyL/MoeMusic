@@ -42,6 +42,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }
     },
     startUpdateDownload: () => ipcRenderer.invoke('start-update-download'),
+    getUpdateState: () => ipcRenderer.invoke('get-update-state'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+    onUpdateState: (listener) => {
+        const wrapped = (_event, state) => listener(state);
+        ipcRenderer.on('update-state', wrapped);
+        return () => ipcRenderer.removeListener('update-state', wrapped);
+    },
     showOpenDialog: (options) => ipcRenderer.invoke('show-open-dialog', options),
     openMvWindow: (url) => ipcRenderer.invoke('open-mv-window', url),
     openLogPath: () => ipcRenderer.invoke('open-log-path'),
